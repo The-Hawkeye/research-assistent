@@ -8,14 +8,14 @@ from crewai import Agent, Task, Crew, Process, LLM
 from src.retriever import retrieve
 from src.search import search_web
 from src.rag_answer import answer_with_context, validate_answer
-
+import streamlit as st
 # ---- Load env ---- #
 load_dotenv()
-
+grok_key = st.secrets["GROQ_API_KEY"]
 # ---- Configure Groq LLM for CrewAI ---- #
 llm = LLM(
     model="groq/llama-3.1-8b-instant",   # ✅ IMPORTANT
-    api_key=os.getenv("GROQ_API_KEY")
+    api_key=grok_key
 )
 
 # ---- AGENTS ---- #

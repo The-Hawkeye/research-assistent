@@ -4,12 +4,12 @@ from dotenv import load_dotenv
 from typing import List
 from langchain_core.documents import Document
 import streamlit as st
-# grok_key = st.secrets["GROQ_API_KEY"]
+grok_key = st.secrets["GROQ_API_KEY"]
 
 load_dotenv()
 
-client = Groq(api_key=os.getenv("GROQ_API_KEY"))
-# client = Groq(api_key=grok_key)
+# client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+client = Groq(api_key=grok_key)
 
 # ✅ MAIN ANSWER FUNCTION (MISSING)
 def answer_with_context(query: str, docs: List[Document]):
