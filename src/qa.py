@@ -1,57 +1,67 @@
-import re
-from datetime import datetime
 from typing import List
+import os
+from dotenv import load_dotenv
+
 from langchain_core.documents import Document
+from crewai import Agent, Task, Crew, Process, LLM
 
 from src.retriever import retrieve
 from src.search import search_web
-from src.rag_answer import answer_with_context
-from src.rag_answer import validate_answer
+from src.rag_answer import answer_with_context, validate_answer
 
-# ---- Heuristic routing ----
-RECENCY_PAT = re.compile(r"\b(latest|today|recent|202[3-9])\b", re.I)
+# ---- Load env ---- #
+load_dotenv()
 
-def heuristic_route(query: str, has_local: bool):
-    if RECENCY_PAT.search(query):
-        return "hybrid" if has_local else "web"
-    return "local" if has_local else "web"
+# ---- Configure Groq LLM for CrewAI ---- #
+llm = LLM(
+    model="groq/llama-3.1-8b-instant",   # ✅ IMPORTANT
+    api_key=os.getenv("GROQ_API_KEY")
+)
+
+# ---- AGENTS ---- #
+
+router_agent = Agent(
+    role="Router Agent",
+    goal="Decide whether to use local documents, web search, or both",
+    backstory="Expert at understanding user intent and selecting best data source",
+    llm=llm,
+    verbose=False
+)
+
+retriever_agent = Agent(
+    role="Retriever Agent",
+    goal="Retrieve relevant information from local vector database",
+    backstory="Expert in semantic search over PDFs",
+    llm=llm,
+    verbose=False
+)
+
+web_agent = Agent(
+    role="Web Search Agent",
+    goal="Retrieve latest information from the web",
+    backstory="Expert in Tavily search",
+    llm=llm,
+    verbose=False
+)
+
+answer_agent = Agent(
+    role="Answer Generator",
+    goal="Generate accurate answers using provided context",
+    backstory="Expert in reasoning and synthesis",
+    llm=llm,
+    verbose=False
+)
+
+validator_agent = Agent(
+    role="Validator",
+    goal="Validate answer correctness and detect hallucinations",
+    backstory="Expert in fact-checking",
+    llm=llm,
+    verbose=False
+)
 
 
-# ---- CrewAI Router ----
-from crewai import Agent, Task, Crew, Process
-
-def classify_route_llm(query: str):
-    try:
-        router = Agent(
-            role="Router",
-            goal="Return exactly: local | web | hybrid",
-            backstory="Smart query router",
-            verbose=False
-        )
-
-        task = Task(
-            description=f"Query: {query}",
-            expected_output="local | web | hybrid",
-            agent=router
-        )
-
-        result = Crew(
-            agents=[router],
-            tasks=[task],
-            process=Process.sequential
-        ).kickoff()
-
-        out = result.raw.strip().lower()
-        if out not in ["local", "web", "hybrid"]:
-            return "hybrid"
-
-        return out
-
-    except:
-        return None
-
-
-# ---- BGE Reranker ----
+# ---- RERANKER ---- #
 try:
     from FlagEmbedding import FlagReranker
     RERANKER = FlagReranker("BAAI/bge-reranker-base", use_fp16=True)
@@ -70,40 +80,84 @@ def rerank(query: str, docs: List[Document], top_n=5):
     return [d for d, _ in ranked[:top_n]]
 
 
-# ---- MAIN PIPELINE ----
+# ---- MAIN PIPELINE ---- #
+
 def run_query(query: str):
-    local_docs = retrieve(query)
 
-    route = classify_route_llm(query)
-    if not route:
-        route = heuristic_route(query, bool(local_docs))
+    # ---- ROUTER TASK ---- #
+    routing_task = Task(
+        description=f"""
+    You are a smart routing agent.
 
-    web_docs = search_web(query) if route in ["web", "hybrid"] else []
+    Decide best data source for the query.
 
-    web_docs = [
-        Document(
-            page_content=w["text"],   # ✅ FIX
-            metadata={
-                "source": "web",
-                "url": w.get("url"),
-                "title": w.get("title"),
-            }
-        )
-        for w in web_docs if w.get("text")
-    ]
+    Rules:
+    - If query refers to uploaded document, PDF → use "local"
+    - If query asks latest/current info → use "web"
+    - If both needed → use "hybrid"
+
+    Query: {query}
+
+    Return ONLY one word: local OR web OR hybrid
+    """,
+        expected_output="local | web | hybrid",
+        agent=router_agent
+    )
+    routing_result = Crew(
+        agents=[router_agent],
+        tasks=[routing_task],
+        process=Process.sequential
+    ).kickoff()
+
+    route = routing_result.raw.strip().lower()
+
+    if route not in ["local", "web", "hybrid"]:
+        route = "hybrid"
+
+    # ---- RETRIEVAL ---- #
+    local_docs = []
+    web_docs = []
+
+    if route in ["local", "hybrid"]:
+        local_docs = retrieve(query)
+
+    if route in ["web", "hybrid"]:
+        web_results = search_web(query)
+
+        web_docs = [
+            Document(
+                page_content=w["text"],
+                metadata={
+                    "source": "web",
+                    "url": w.get("url"),
+                    "title": w.get("title"),
+                }
+            )
+            for w in web_results if w.get("text")
+        ]
 
     all_docs = local_docs + web_docs
 
-    # 🔥 RERANK HERE
+    # ---- RERANK ---- #
     ranked_docs = rerank(query, all_docs)
 
-    # Generate answer
-    answer_stream = answer_with_context(query, ranked_docs)
+    # ---- ANSWER GENERATION ---- #
+    answer = answer_with_context(query, ranked_docs)
 
-    # Collect answer (for validation)
-    full_answer = "".join(list(answer_stream))
+    # ---- VALIDATION ---- #
+    validation = validate_answer(query, answer, ranked_docs, web_docs)
 
-    # 🔥 VALIDATION STEP
-    validation = validate_answer(query, full_answer, ranked_docs, web_docs)
+    return f"""
+{answer}
 
-    return full_answer + "\n\n---\nValidation:\n" + validation
+---
+
+📌 Route Used: {route}
+
+📊 Sources:
+- Local Docs: {len(local_docs)}
+- Web Docs: {len(web_docs)}
+
+🔍 Validation:
+{validation}
+"""
