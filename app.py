@@ -42,11 +42,11 @@ def handle_query():
 
 
 # ---- UI ---- #
-st.title("🚀 Agentic Research Assistant")
+st.title("Agentic Research Assistant")
 
 col1, col2 = st.columns([3, 1])
 with col2:
-    if st.button("🆕 New Chat"):
+    if st.button("New Chat"):
         reset_all()
         st.rerun()
 
@@ -66,7 +66,7 @@ if uploaded:
         with open(os.path.join(UPLOAD_DIR, f.name), "wb") as out:
             out.write(f.getbuffer())
 
-    if st.button("📥 Ingest PDFs"):
+    if st.button("Ingest PDFs"):
         ingest_pdfs()
         st.success("Indexed successfully!")
 
