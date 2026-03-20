@@ -9,5 +9,5 @@ COLLECTION_NAME = "docs"
 DYNAMIC_CHROMA_DIR = BASE_DIR / "data" / "dynamic_chroma"
 PDF_PATH = BASE_DIR / "uploaded_pdfs"
 
-TOP_K = 5
+TOP_K =15
 
